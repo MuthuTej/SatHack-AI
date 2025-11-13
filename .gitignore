@@ -1,0 +1,25 @@
+# Python cache and virtual environment
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+venv/
+
+serviceAccountKey.json
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Logs and temporary files
+*.log
+test.txt
+
+# Jupyter checkpoints (if any)
+.ipynb_checkpoints/
+
+# IDE specific files
+.vscode/
+.idea/
+.env
+serviceAccountKey.json

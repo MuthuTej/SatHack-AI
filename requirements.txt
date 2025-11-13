@@ -1,0 +1,9 @@
+fastapi
+uvicorn[standard]
+tensorflow
+numpy
+pillow
+joblib
+python-multipart
+firebase-admin
+
