@@ -6,4 +6,5 @@ pillow
 joblib
 python-multipart
 firebase-admin
-
+pandas
+scikit-learn
