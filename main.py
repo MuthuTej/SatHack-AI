@@ -1,6 +1,7 @@
 import base64
 import io
 import numpy as np
+import pandas as pd
 import joblib
 from PIL import Image
 from fastapi import FastAPI, HTTPException
@@ -9,6 +10,8 @@ from tensorflow.keras.models import load_model
 from tensorflow.keras.preprocessing import image
 import uvicorn
 from firebase_config import database
+import pickle
+
 
 app = FastAPI(title="Soil Classification API")
 
@@ -16,22 +19,19 @@ app = FastAPI(title="Soil Classification API")
 model = load_model("soil_mobilenet.h5")
 class_indices = joblib.load("soil_class_indices.pkl")
 classes = {v: k for k, v in class_indices.items()}
-groundwater_model = load_model("groundwater_prediction_model.h5", compile=False)
-rain_model = load_model("rainfall_prediction_model.h5", compile=False)
 
-class RainfallInput(BaseModel):
-    temperature: float
-    humidity: float
-    pressure: float
-    soil_moisture: float
-    ultrasonic_distance: float
+model_water = load_model('water_model.h5', compile=False)
+model_crop = load_model('crop_model.h5', compile=False)
+model_time = load_model('time_model.h5', compile=False)
 
-class GroundwaterRequest(BaseModel):
-    temperature: float
-    humidity: float
-    pressure: float
-    soil_moisture: float
 
+with open('crop_encoders.pkl', 'rb') as f:
+    crop_encoders = pickle.load(f)
+with open('water_encoders.pkl', 'rb') as f:
+    water_encoders = pickle.load(f)
+with open('time_encoders.pkl', 'rb') as f:
+    time_encoders = pickle.load(f)
+    
 # Request model
 class ImageRequest(BaseModel):
     image: str  # Base64-encoded image string
@@ -89,52 +89,48 @@ def predict_base64(request: ImageRequest):
 
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
-
-@app.post("/predict_groundwater")
-def predict_groundwater(request: GroundwaterRequest):
+    
+@app.post("/predict")
+def predict(data: dict):
     try:
-        # Arrange features EXACTLY as in training
-        input_data = np.array([[
-            request.temperature,
-            request.humidity,
-            request.pressure,
-            request.soil_moisture
-        ]])
+        # Convert input dictionary to DataFrame
+        df_input = pd.DataFrame([data])
 
-        # Scale using saved scaler
-        # scaled = scaler_g.transform(input_data)
+        # Transform categorical features safely
+        try:
+            X_cat = time_encoders['encoder_cat'].transform(
+                df_input[['soil_type', 'month']].astype(str)
+            )
+        except ValueError as e:
+            return {"error": f"Unknown category encountered: {str(e)}"}
 
-        # Predict
-        pred = groundwater_model.predict(input_data)
-        groundwater_value = float(pred[0][0])
+        # Transform numeric features
+        X_num = time_encoders['scaler'].transform(
+            df_input[['temperature', 'pressure', 'groundwater_level', 'rainfall']]
+        )
+
+        # Combine numeric and categorical features
+        X_input = np.concatenate([X_num, X_cat], axis=1)
+
+        # Crop prediction
+        pred_crop = model_crop.predict(X_input)
+        crop_label = crop_encoders['encoder_crop'].inverse_transform(pred_crop)[0][0]
+
+        # Water prediction
+        pred_water = model_water.predict(X_input)[0][0]
+
+        # Irrigation time prediction
+        pred_time = model_time.predict(X_input)
+        time_label = time_encoders['encoder_time'].inverse_transform(pred_time)[0][0]
 
         return {
-            "groundwater_level_pred": groundwater_value,
-            "note": "groundwater_level unit = same as training dataset"
+            "crop": crop_label,
+            "water_needed": float(pred_water),
+            "irrigation_time": time_label
         }
 
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
-@app.post("/predict-rainfall")
-def predict_rainfall(data: RainfallInput):
-    # Convert input data to array
-    input_features = np.array([[
-        data.temperature,
-        data.humidity,
-        data.pressure,
-        data.soil_moisture,
-        data.ultrasonic_distance
-    ]])
-    
-    # Scale features
-    # input_scaled = scaler_r.transform(input_features)
-    
-    # Predict
-    pred = rain_model.predict(input_features)
-    
-    # Return prediction as float
-    return {"predicted_rainfall": float(pred[0][0])}
+        return {"error": f"Prediction failed: {str(e)}"}
 
 if __name__ == "__main__":
     uvicorn.run(app, host="0.0.0.0", port=5001)
